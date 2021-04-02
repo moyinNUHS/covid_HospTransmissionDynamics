@@ -1,0 +1,21 @@
+
+model{
+    # Likelihood:
+    for (i in 1:N){
+      outcome[i] ~ dbern(mu[i]) 
+      
+      mu[i] <- a +   # intercept  
+        b * foi_comm[i] +  
+        c * foi_noso[i]  + 
+        d * foi_staff[i]
+      
+      loglike[i] <- dbin(outcome[i], mu[i], 1) # For WAIC computation
+    }
+    
+    # Priors:
+    a ~ dnorm(0, 0.02) T(0, ) 
+    b ~ dnorm(0.005, 0.02) T(0, ) 
+    c ~ dnorm(0.005, 0.02) T(0, ) 
+    d ~ dnorm(0.005, 0.02) T(0, ) 
+}
+

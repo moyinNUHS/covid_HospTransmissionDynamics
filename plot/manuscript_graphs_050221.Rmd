@@ -1,0 +1,526 @@
+---
+title: "Oxford COVID-19 manuscript graphs"
+author: "Mo Yin"
+date: "5/2/2021"
+output: bookdown::html_document2
+---
+
+
+```{r setup, include=FALSE}
+
+# required libraries
+library(knitr)
+library(ggplot2); library(ggpubr); library(scales)
+library(huxtable)
+library(dplyr)
+library(parallel)
+library(grid)
+library(lubridate)
+library(ggpattern)
+require(mgcv)
+require(tidymv)
+theme_set(theme_minimal())
+library(survival)
+library(pammtools)
+library(mgcViz)
+
+# set working directory 
+knitr::opts_knit$set(root.dir = '~/Documents/nBox/COVID/HA_COVID/Oxford')
+
+#clean environment 
+rm(list = ls())
+
+##### STEPS 
+# 1. Clean data 
+### clean raw - clean data downloaded from server - check NA values etc - gives 'clean_raw.Rdata'
+### merge raw - merge cleaned raw data into array of date against patient id against variables - gives metadata
+### clean stan - prepare metadata into dataframes of observation days against variables - gives master.stan.dat.noncomplete.Rdata
+###            - expand factors into binary columns since stan only takes in binary - gives master.stan.dat.complete.Rdata
+
+# load data 
+load('~/Documents/nBox/COVID/HA_COVID/Oxford/metadata/pt.df190221.Rdata')
+load('~/Documents/nBox/COVID/HA_COVID/Oxford/metadata/staff.df190221.Rdata')
+load('~/Documents/nBox/COVID/HA_COVID/Oxford/metadata/dateseq.Rdata')
+load('~/Documents/nBox/COVID/HA_COVID/Oxford/metadata/raw_140221.Rdata')
+load('~/Documents/nBox/COVID/HA_COVID/Oxford/analysis_code/pt.gam.mod_190221.Rdata')
+load('~/Documents/nBox/COVID/HA_COVID/Oxford/analysis_code/pt.gam.mod.onlycal_190221.Rdata')
+load('~/Documents/nBox/COVID/HA_COVID/Oxford/analysis_code/staff.gam.mod_190221.Rdata')
+load('~/Documents/nBox/COVID/HA_COVID/Oxford/analysis_code/staff.gam.mod.onlycal_190221.Rdata')
+
+font.size = 20
+```
+
+
+```{r echo = FALSE, warning = FALSE, message = FALSE, include = FALSE}
+# get a plot of patients and staff by ward over time 
+## to infer transmission from other patients (community and nosocomial) and staff to nosocomially acquired cases 
+
+# get a plot of patients and staff by ward over time 
+## to infer transmission from other patients (community and nosocomial) and staff to nosocomially acquired cases 
+
+## select wards with at least 30 staff and patient bed capacity 
+## find capacity of the wards 
+colnames(ward_occupancy) = c('datetime', 'ward', 'n.pt', 'date')
+staff.df$present = 1
+staff.capacity = staff.df[,c('date', 'ward', 'present')] %>%
+  group_by(date, ward) %>%
+  summarise(n.staff = sum(present))
+combine = merge(ward_occupancy, staff.capacity, by = c('date', 'ward'), all = T)
+select.wards = unique(combine$ward[which(combine$n.pt > 20 & combine$n.staff > 30)])
+
+## get a dataframe of patients at risk(for those classified as nosocomial with 5 day threshold), infectious pressure 
+#  from patients and staff (based on incubation of 5 days)
+infection.pa = pt.df[,c("ward", "date", 
+                        "pt_infectpa_binary_incub5_comm", 
+                        "pt_infectpa_binary_incub5_noso",
+                        "staff_infectpa_binary_incub5")]
+atrisk = pt.df[,c("date", "ward",'atrisk_incub5', 'noso.acq5')]
+atrisk_noso = atrisk[which(atrisk$noso.acq5 == 1), c('date', 'ward', 'atrisk_incub5')]
+atrisk_noso$atrisk_incub5 = as.numeric(as.character(atrisk_noso$atrisk_incub5))
+atrisk_sum = atrisk_noso %>% 
+  group_by(date, ward) %>%
+  summarise(atrisk_incub5 = sum(atrisk_incub5))
+by.day = unique(merge(infection.pa, atrisk_sum, by = c('date', 'ward'), all.x = T))
+by.day$atrisk_incub5[is.na(by.day$atrisk_incub5)] = 0
+by.day$staff_infectpa_binary_incub5[is.na(by.day$staff_infectpa_binary_incub5)] = 0
+include.all.days = expand.grid('date' = obs.seq, ward = by.day$ward, val = 0)
+by.day = merge(include.all.days, by.day, by = c('date', 'ward'), all.x = T)
+by.day = by.day[, -grep('val', colnames(by.day))]
+by.day$pt_infectpa_binary_incub5_comm[is.na(by.day$pt_infectpa_binary_incub5_comm)] = 0
+by.day$pt_infectpa_binary_incub5_noso[is.na(by.day$pt_infectpa_binary_incub5_noso)] = 0
+by.day$staff_infectpa_binary_incub5[is.na(by.day$staff_infectpa_binary_incub5)] = 0
+by.day$atrisk_incub5[is.na(by.day$atrisk_incub5)] = 0
+by.day$week = cut(as.Date(by.day$date), "week")
+by.week = by.day %>% 
+  dplyr::group_by(week, ward) %>%
+  dplyr::summarise_at(vars(pt_infectpa_binary_incub5_comm : atrisk_incub5), list(mean = mean))
+atrisk.wards = unique(by.week$ward[which(by.week$atrisk_incub5_mean > 0)]) #pick wards with patients at risk
+infectious.wards = unique(by.week$ward[which(rowSums(by.week[grep('infectpa', colnames(by.week))]) > 0)])
+at.risk.infectious.wards = intersect(atrisk.wards, infectious.wards)
+select.at.risk.infectious.wards = intersect(select.wards, at.risk.infectious.wards)
+select.at.risk.infectious.wards = select.at.risk.infectious.wards[- which(select.at.risk.infectious.wards %in% c("J-WD Newborn IC", "J-WD Delivery"))]
+df.wksum = by.week[by.week$ward %in% select.at.risk.infectious.wards,]
+df.wksum$ward = as.factor(as.character(df.wksum$ward))
+
+#melt dataframe to long form 
+df.melt = reshape2::melt(df.wksum, id.var = c('week', 'ward'))
+df.melt$week = as.Date(df.melt$week)
+# change the levels so at-risk shows up on top
+df.melt$variable = factor(df.melt$variable, 
+                          levels = c('atrisk_incub5_mean', 'pt_infectpa_binary_incub5_comm_mean', 'pt_infectpa_binary_incub5_noso_mean', 'staff_infectpa_binary_incub5_mean'))
+
+## plot 
+source('~/Documents/nBox/COVID/HA_COVID/Oxford/analysis_code/plot_perday.R')
+
+plots.nodate1 = list()
+for (p in levels(df.melt$ward)[1:5]) {
+  d = df.melt[which(df.melt$ward == p),]
+  plots.nodate1[[p]] = plot_perday_nodate(d)
+}
+
+plots.nodate2 = list()
+for (p in levels(df.melt$ward)[6:10]) {
+  d = df.melt[which(df.melt$ward == p),]
+  plots.nodate2[[p]] = plot_perday_nodate(d)
+}
+
+plots.nodate3 = list()
+for (p in levels(df.melt$ward)[11:15]) {
+  d = df.melt[which(df.melt$ward == p),]
+  plots.nodate3[[p]] = plot_perday_nodate(d)
+}
+
+plots.yesdate = list()
+for (p in levels(df.melt$ward)[16:20]) {
+  d = df.melt[which(df.melt$ward == p),]
+  plots.yesdate[[p]] = plot_perday_yesdate(d)
+}
+
+p1 = ggpubr::ggarrange(plotlist = plots.nodate1, ncol = 5, nrow = 1, legend = "none")
+p2 = ggarrange(plotlist = plots.nodate2, ncol = 5, nrow = 1, legend = "none")
+p3 = ggarrange(plotlist = plots.nodate3, ncol = 5, nrow = 1, legend = "none")
+p4 = ggarrange(plotlist = plots.yesdate, ncol = 5, nrow = 1, legend = "bottom", common.legend = T)
+
+plot = ggarrange(p1, p2, p3, p4, nrow = 4, ncol = 1, heights = c(1, 1, 1, 2))
+
+
+plot = annotate_figure(plot, left = text_grob("                                        Weekly average number of individuals", rot = 90, size = 30))
+
+
+```
+
+```{r staffptward, echo = F, warning = F, fig.align = 'centre', fig.width = 22, fig.height = 23}
+
+plot
+
+```
+
+```{r echo = FALSE, warning = FALSE, message = FALSE, include = FALSE}
+# PATIENTS 
+# test rates 
+
+test.df = data.frame(date = as.Date(pt.df$date), 
+                     test = pt.df$test.result.code,
+                     id = pt.df$id, 
+                     noso3 = pt.df$noso.acq3, 
+                     noso5 = pt.df$noso.acq5, 
+                     noso7 = pt.df$noso.acq7)
+test.df = test.df[!is.na(test.df$test),]
+test.df$done = 1
+test.df$positive = 0 
+test.df$positive[which(test.df$test == 1)] = 1
+test.df$negative = abs(test.df$positive - 1)
+test.df$week = cut(test.df$date, 'week')
+
+## total per week 
+test.df.week = test.df %>% 
+  group_by(week) %>%
+  summarise_at(vars(positive, negative), list(sum = sum))
+test.df.melt = reshape2::melt(test.df.week, id.var = 'week')
+test.df.melt$week = as.Date(test.df.melt$week)
+
+p1 = ggplot(test.df.melt, aes(x = week, y = value, fill = variable)) + 
+  geom_bar(position="stack", stat="identity") + 
+  labs(y = 'Total number of tests performed per week', x = '',  subtitle = 'A') +
+  scale_fill_manual(values = c('#B6D7B9', '#F17300'), name = '', 
+                    labels = c('Negative tests', 'Positive tests')) +
+  scale_x_date(date_breaks = "1 month", date_labels = "%B") +
+  theme_minimal() +
+  guides(fill=guide_legend(nrow=2, byrow=TRUE)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1), 
+        text = element_text(size = font.size), 
+        legend.position = c(0.15, 0.8)) 
+
+## by nosocomial classification 
+test.df.pos = test.df[which(test.df$positive == 1),] #take only positive tests 
+test.df.pos = test.df.pos[order(test.df.pos$id),]
+test.df.pos.first = test.df.pos[!duplicated(test.df.pos$id),]
+test.df.pos.first$noso3 = as.numeric(as.character(test.df.pos.first$noso3))
+test.df.pos.first$noso5 = as.numeric(as.character(test.df.pos.first$noso5))
+test.df.pos.first$noso7 = as.numeric(as.character(test.df.pos.first$noso7))
+
+test.df.pos.week = test.df.pos.first %>% 
+  group_by(week) %>%
+  summarise_at(vars(noso3 : noso7), list(sum = sum))
+test.df.melt = reshape2::melt(test.df.pos.week, id.var = 'week')
+test.df.melt$week = as.Date(test.df.melt$week)
+p2 = ggplot(test.df.melt, aes(x = week, y = value, fill = variable)) + 
+  geom_bar(position="dodge", stat="identity") + 
+  labs(y = 'Number of  positive tests per week', x = '', subtitle = 'B') +
+  scale_fill_manual(values = c('#81A4CD', '#3E7CB1', '#054A91'), name = 'Potential hospital-acquired COVID-19\ncases:', 
+                    labels = c('admitted on 3rd day prior to symptom onset', 
+                               'admitted on 5th day prior to symptom onset', 
+                               'admitted on 7th day prior to symptom onset')) +
+  scale_x_date(date_breaks = "1 month", date_labels = "%B") + 
+  theme_minimal() +
+  guides(fill=guide_legend(nrow=4, byrow=TRUE)) +
+  theme(legend.position = c(0.65, 0.8), 
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1), 
+        text = element_text(size = font.size)) 
+
+```
+
+
+```{r echo = FALSE, warning = FALSE, message = FALSE, include = FALSE}
+## los for nosocomial (>1 day hospitalisation prior to test) 
+
+# pt.df.admitted = pt.df[which(pt.df$admitted == 1),]
+# 
+# noso.id = unique(pt.df.admitted$id[which(pt.df.admitted$noso.acq5 == 1)])
+# admitted.within.20.days.before.first.symptom = lapply(noso.id, function(x){ #for each nosocomial patient
+#   first.symptom.date = pt.df$date[which(pt.df$first.symptom == 1 & pt.df$id == x)]
+#   admitted.x.days.before.first.symptom = unique(as.Date(first.symptom.date) - as.Date(pt.df.admitted$date[which(pt.df.admitted$id == x)]))
+#   admitted.x.days.before.first.symptom[which(admitted.x.days.before.first.symptom <= 20 & admitted.x.days.before.first.symptom > 0)]
+# })
+# admitted.within.20.days.before.first.symptom.sum = table(unlist(admitted.within.20.days.before.first.symptom))
+# los.dis = as.data.frame(admitted.within.20.days.before.first.symptom.sum)
+# colnames(los.dis)  = c('day','no.admitted.x.days.prior')
+# los.dis$no.not.admitted.x.days.prior = length(noso.id) - los.dis$no.admitted.x.days.prior
+# los.dis.melt = reshape2::melt(los.dis, id.var = 'day')
+# los.dis.melt$type = 'noso5'
+# 
+# noso3.id = unique(pt.df.admitted$id[which(pt.df.admitted$noso.acq3 == 1)])
+# admitted.within.20.days.before.first.symptom = lapply(noso3.id, function(x){ #for each nosocomial patient
+#   first.symptom.date = unique(as.Date(pt.df$date[which(pt.df$first.symptom == 1 & pt.df$id == x)]))
+#   admitted.x.days.before.first.symptom = as.numeric(first.symptom.date - unique(as.Date(pt.df.admitted$date[which(pt.df.admitted$id == x)])))
+#   admitted.x.days.before.first.symptom[which(admitted.x.days.before.first.symptom <= 20 & admitted.x.days.before.first.symptom > 0)]
+# })
+# admitted.within.20.days.before.first.symptom.sum = table(unlist(admitted.within.20.days.before.first.symptom))
+# los.dis = as.data.frame(admitted.within.20.days.before.first.symptom.sum)
+# colnames(los.dis)  = c('day','no.admitted.x.days.prior')
+# los.dis$no.not.admitted.x.days.prior = length(noso3.id) - los.dis$no.admitted.x.days.prior
+# los.dis.melt3 = reshape2::melt(los.dis, id.var = 'day')
+# los.dis.melt3$type = 'noso3'
+# 
+# noso7.id = unique(pt.df.admitted$id[which(pt.df.admitted$noso.acq7 == 1)])
+# admitted.within.20.days.before.first.symptom = lapply(noso7.id, function(x){ #for each nosocomial patient
+#   first.symptom.date = pt.df$date[which(pt.df$first.symptom == 1 & pt.df$id == x)]
+#   admitted.x.days.before.first.symptom = unique(as.Date(first.symptom.date) - as.Date(pt.df.admitted$date[which(pt.df.admitted$id == x)]))
+#   admitted.x.days.before.first.symptom[which(admitted.x.days.before.first.symptom <= 20 & admitted.x.days.before.first.symptom > 0)]
+# })
+# admitted.within.20.days.before.first.symptom.sum = table(unlist(admitted.within.20.days.before.first.symptom))
+# los.dis = as.data.frame(admitted.within.20.days.before.first.symptom.sum)
+# colnames(los.dis)  = c('day','no.admitted.x.days.prior')
+# los.dis$no.not.admitted.x.days.prior = length(noso7.id) - los.dis$no.admitted.x.days.prior
+# los.dis.melt7 = reshape2::melt(los.dis, id.var = 'day')
+# los.dis.melt7$type = 'noso7'
+# 
+# los.dis = rbind.data.frame(los.dis.melt, los.dis.melt3, los.dis.melt7)
+# los.dis$variable = factor(los.dis$variable, levels = c("no.not.admitted.x.days.prior", "no.admitted.x.days.prior"))
+# 
+# p3 = ggplot(los.dis, aes(x = type, y = value, fill = variable, alpha = type)) + 
+#   geom_bar(position="stack", stat="identity")+ 
+#   facet_wrap( ~ day, nrow = 1) +
+#   scale_y_continuous(breaks = seq(0,305,50)) + 
+#   scale_alpha_discrete(range = c(1 , 0.5), name = 'Potential hospital-acquired COVID-19 cases:', 
+#                        labels = c('admitted ≥3 days prior to symptom onset', 
+#                                   'admitted ≥5 days prior to symptom onset', 
+#                                   'admitted ≥7 days prior to symptom onset')) +
+#   scale_x_discrete(position = "top") +
+#   labs(y = 'Number of patients with potentially\nhospital-acquired COVID-19', x = 'Days prior to symptom onset', subtitle = 'C') +
+#   scale_fill_manual(values = c('#7EBDC2', '#BB4430'), labels = c('Not hospitalised on the day prior to symptom onset' , 'Hospitalised on the day prior to symptom onset'), name = '') +
+#   theme_minimal() + 
+#   guides(fill = guide_legend(nrow = 2, byrow=TRUE), 
+#          alpha = guide_legend(nrow = 4, byrow=TRUE, title.position="top")) +
+#   theme(legend.position = 'bottom',
+#         panel.spacing = unit(0, "lines"), 
+#         text = element_text(size = font.size+2),
+#         axis.text.x = element_blank()) 
+
+```
+
+
+```{r nosocomial, fig.cap = "", echo=F, warning=F, fig.align='centre', fig.width=16, fig.height=8}
+ggarrange(p1, p2, ncol = 2, widths = c(1, 1))
+```
+
+
+```{r echo = FALSE, warning = FALSE, message = FALSE, include = FALSE}
+# STAFF 
+# test rates 
+
+pos.rate = data.frame(id = staff.df$id, 
+                      date = staff.df$date, 
+                      outcome = staff.df$infection_day_incub5_outcome)
+pos.rate.df = aggregate(outcome ~ date, pos.rate, sum)
+date.df = data.frame(date = as.character(obs.seq))
+plot.df = merge(date.df, pos.rate.df, by = 'date', all.x = T)
+plot.df$date = as.Date(plot.df$date)
+staff.pos = ggplot(plot.df, aes(x = date, y = outcome)) + 
+  ylab('Total number of staff developing symptoms') +
+  xlab('') +
+  geom_line() + 
+  geom_vline(xintercept= as.Date('2020-04-01'), linetype = 'dashed', color = 'red') + 
+   geom_vline(xintercept= as.Date('2020-04-23'), linetype = 'dashed', color = 'red') 
+
+```
+
+```{r staff.pos, fig.cap = "", echo=F, warning=F, fig.align='centre', fig.width=8, fig.height=8}
+staff.pos
+```
+
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+## how many was admitted for at least 1 day in the 20 days prior to their first positive test
+admit1day = c()
+for (id in unique(pt.df$id[which(pt.df$positive == 1)])){
+  d = pt.df[which(pt.df$id == id), c('date', 'admitted', 'first.symptom')]
+  firstsymptomdate = unique(as.Date(d$date[which(d$first.symptom == 1)]))
+  daysbefore = seq(firstsymptomdate - 20, firstsymptomdate - 1, by = 'day')
+  admit1day[id] = any(as.Date(d$date[which(d$admitted == 1)]) %in% daysbefore)
+}
+sum(admit1day)
+
+dayofstayinfection = c()
+los = c()
+id.noso5 = unique(pt.df$id[which(pt.df$admitted == 1 & pt.df$infection_day_incub5_outcome == 1)])
+length(id.noso5) # how many noso5
+d.noso5 = pt.df[pt.df$id %in% id.noso5, ]
+for (id in unique(d.noso5$id)){
+  d = d.noso5[which(d.noso5$id == id), c('date', 'admitted', 'day.of.stay', 'admission.no', 'infection_day_incub5_outcome')]
+  whichadmission = unique(d$admission.no[which(d$infection_day_incub5_outcome == 1)])
+  los[id] = max(d$day.of.stay[which(d$admission.no == whichadmission)]) #los of the admission when the patient was infected 
+  dayofstayinfection[id] = d$day.of.stay[which(d$infection_day_incub5_outcome == 1)] #which day the patient was infected 
+}
+summary(los)
+summary(dayofstayinfection)
+
+length(unique(staff.df$id))
+length(unique(staff.df$id[which(staff.df$positive == 1)]))
+length(unique(staff.df$id[which(staff.df$positive == 1)]))/length(unique(staff.df$id))
+```
+
+```{r echo = FALSE, warning = FALSE, message = FALSE, include = FALSE}
+
+get.plot.dat <- function(mod, var.no) {
+  
+  g = getViz(mod)
+  dat = plot(sm(g, var.no))$data$fit
+  dat$var = paste0(as.character(mod$call)[2], as.character(var.no))
+  
+  dat
+}
+
+cal.only = get.plot.dat(mod = pt.gam.mod.onlycal, var.no = 1)
+cal = get.plot.dat(mod = pt.gam.mod, var.no = 1)
+pt.comm = get.plot.dat(mod = pt.gam.mod, var.no = 3)
+pt.noso = get.plot.dat(mod = pt.gam.mod, var.no = 4)
+staff = get.plot.dat(mod = pt.gam.mod, var.no = 5) 
+
+cal.plot.dat = rbind.data.frame(cal.only, cal)
+cal.plot.dat$lower = cal.plot.dat$y - cal.plot.dat$se
+cal.plot.dat$upper = cal.plot.dat$y + cal.plot.dat$se
+
+foi.plot.dat = rbind.data.frame(pt.comm, pt.noso, staff)
+foi.plot.dat$lower = foi.plot.dat$y - foi.plot.dat$se
+foi.plot.dat$upper = foi.plot.dat$y + foi.plot.dat$se
+
+
+# get calendar day plot 
+cal.plot = ggplot(cal.plot.dat, aes(x = x, y = y, group = var, color = var, linetype = var)) + 
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = var),  color = NA, alpha = 0.3) + 
+  scale_x_continuous(breaks= c(1, lubridate::yday(as.Date('2020-02-01')),
+                               lubridate::yday(as.Date('2020-03-01')),
+                               lubridate::yday(as.Date('2020-04-01')),
+                               lubridate::yday(as.Date('2020-05-01')),
+                               lubridate::yday(as.Date('2020-06-01')),
+                               lubridate::yday(as.Date('2020-07-01')),
+                               lubridate::yday(as.Date('2020-08-01')),
+                               lubridate::yday(as.Date('2020-09-01')),
+                               lubridate::yday(as.Date('2020-10-01'))), 
+                     labels = c('January','February', 'March', 
+                                'April', 'May', 'June', 
+                                'July', 'August', 'September', 
+                                'October'),
+                     limits = c(61, 250))+
+  scale_y_continuous(limits = c(-2, 20), breaks = seq(0, 20, by = 5))+
+  scale_linetype_manual(values = c('solid', 'dashed'), guide = 'none')+
+  scale_color_manual(values = c('grey20', 'grey80'),
+                       name = '', 
+                       labels = c('Analysis accounted for demographics and forces of infection', 
+                                  'Unadjusted analysis')) + 
+  scale_fill_manual(values = c('grey20', 'grey80'), guide = 'none') + 
+  ylab('Partial effect of calendar days on daily\nrisk of nosocomial SARS-CoV-2 infection') + 
+  xlab('') + 
+  theme_minimal() + 
+  theme(text = element_text(size = font.size), 
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+        legend.position = c(0.5, 0.8)) +
+  guides(color = guide_legend(nrow = 2, byrow = TRUE))
+
+
+# get FOI plot 
+foi.plot = ggplot(foi.plot.dat, aes(x = x, y = y, group = var, color = var)) + 
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = var),  color = NA, alpha = 0.3) + 
+  scale_y_continuous(limits = c(-1, 5)) + 
+  scale_x_continuous(limits = c(0, 4)) +
+  scale_color_discrete(name = 'Types of infectious individual', 
+                       labels = c('Patients with likely community-acquired COVID-19', 
+                                  'Patients with potentially hospital-acquired COVID-19',
+                                  'Health care staff')) + 
+  scale_fill_discrete(guide = 'none') + 
+  ylab('Partial effect of infectious individuals on daily\nrisk of nosocomial SARS-CoV-2 infection') + 
+  xlab('') + 
+  theme_minimal() + 
+  theme(text = element_text(size = 15), 
+        legend.position = c(0.5, 0.8)) +
+  guides(color = guide_legend(nrow = 3, byrow = TRUE))
+
+
+
+```
+
+```{r gam_pt, fig.cap = "", echo=F, warning=F, fig.align='centre', fig.width=16, fig.height=8}
+ggarrange(cal.plot, foi.plot, ncol = 2)
+```
+
+```{r echo = FALSE, warning = FALSE, message = FALSE, include = FALSE}
+
+cal.only = get.plot.dat(mod = staff.gam.mod.onlycal, var.no = 1)
+cal = get.plot.dat(mod = staff.gam.mod, var.no = 1)
+pt.comm = get.plot.dat(mod = staff.gam.mod, var.no = 2)
+pt.noso = get.plot.dat(mod = staff.gam.mod, var.no = 3)
+staff = get.plot.dat(mod = staff.gam.mod, var.no = 4) 
+
+cal.plot.dat = rbind.data.frame(cal.only, cal)
+cal.plot.dat$lower = cal.plot.dat$y - cal.plot.dat$se
+cal.plot.dat$upper = cal.plot.dat$y + cal.plot.dat$se
+
+foi.plot.dat = rbind.data.frame(pt.comm, pt.noso, staff)
+foi.plot.dat$lower = foi.plot.dat$y - foi.plot.dat$se
+foi.plot.dat$upper = foi.plot.dat$y + foi.plot.dat$se
+
+cal.plot = ggplot(cal.plot.dat, aes(x = x, y = y, group = var, color = var, linetype = var)) + 
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = var),  color = NA, alpha = 0.3) + 
+  scale_x_continuous(breaks= c(1, lubridate::yday(as.Date('2020-02-01')),
+                               lubridate::yday(as.Date('2020-03-01')),
+                               lubridate::yday(as.Date('2020-04-01')),
+                               lubridate::yday(as.Date('2020-05-01')),
+                               lubridate::yday(as.Date('2020-06-01')),
+                               lubridate::yday(as.Date('2020-07-01')),
+                               lubridate::yday(as.Date('2020-08-01')),
+                               lubridate::yday(as.Date('2020-09-01')),
+                               lubridate::yday(as.Date('2020-10-01'))), 
+                     labels = c('January','February', 'March', 
+                                'April', 'May', 'June', 
+                                'July', 'August', 'September', 
+                                'October'),
+                     limits = c(61, 250))+
+  scale_y_continuous(limits = c(-3, 20), breaks = seq(0, 20, by = 5))+
+  scale_linetype_manual(values = c('solid', 'dashed'), guide = 'none')+
+  scale_color_manual(values = c('grey20', 'grey80'),
+                     name = '', 
+                     labels = c('Analysis accounted for demographics and forces of infection', 
+                                'Unadjusted analysis')) + 
+  scale_fill_manual(values = c('grey20', 'grey80'), guide = 'none') + 
+  ylab('Partial effect of calendar days on daily\nrisk of nosocomial SARS-CoV-2 infection') + 
+  xlab('') + 
+  theme_minimal() + 
+  theme(text = element_text(size = font.size), 
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+        legend.position = c(0.5, 0.8)) +
+  guides(color = guide_legend(nrow = 2, byrow = TRUE))
+
+
+# get FOI plot 
+foi.plot = ggplot(foi.plot.dat, aes(x = x, y = y, group = var, color = var)) + 
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = var),  color = NA, alpha = 0.3) + 
+  scale_y_continuous(limits = c(-1, 5)) + 
+  scale_x_continuous(limits = c(0, 4)) +
+  scale_color_discrete(name = 'Types of infectious individual', 
+                       labels = c('Patients with likely community-acquired COVID-19', 
+                                  'Patients with potentially hospital-acquired COVID-19',
+                                  'Health care staff')) + 
+  scale_fill_discrete(guide = 'none') + 
+  ylab('Partial effect of infectious individuals on daily\nrisk of nosocomial SARS-CoV-2 infection') + 
+  xlab('') + 
+  theme_minimal() + 
+  theme(text = element_text(size = 15), 
+        legend.position = c(0.5, 0.8)) +
+  guides(color = guide_legend(nrow = 3, byrow = TRUE))
+
+
+
+```
+
+```{r gam_staff, fig.cap = "", echo=F, warning=F, fig.align='centre', fig.width=16, fig.height=8}
+ggarrange(cal.plot, foi.plot, ncol = 2)
+```
+
+
+<!-- ```{r main_patient, fig.cap = "", echo=F, warning=F, fig.align='centre', fig.width=16, fig.height=8} -->
+<!-- source('analysis_code/plotCrI.R') -->
+
+<!-- plot.dat.pt = get.95CI(fit_PT_noint_ward_main) -->
+<!-- plotCrI(plot.dat.pt) -->
+<!-- ``` -->
+
+<!-- ```{r main_staff, fig.cap = "", echo=F, warning=F, fig.align='centre', fig.width=16, fig.height=8} -->
+
+<!-- plot.dat.staff = get.95CI(fit_STAFF_noint_ward_main) -->
+<!-- plotCrI(plot.dat.staff) -->
+<!-- ``` -->

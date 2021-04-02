@@ -1,0 +1,18 @@
+ssh moyin@163.1.213.159
+screen -S jags_PT_incub3_wardTRUE_intFALSE_binary_phase12FALSE_0.002_0.02_2021-03-19
+cd ~/oxford_covid/analysis/output_raw
+jags
+model in "~/oxford_covid/analysis/models/noint_ward.txt"
+data in "~/oxford_covid/analysis/data/PT_incub3_wardTRUE_intFALSE_binary_phase12FALSE_0.002_0.02_data.R"
+compile, nchains(3)
+parameters in "~/oxford_covid/analysis/data/PT_incub3_wardTRUE_intFALSE_binary_phase12FALSE_0.002_0.02_init.R"
+initialize
+update 2000
+monitor a, thin (10)
+monitor b, thin (10)
+monitor c, thin (10)
+monitor d, thin (10)
+monitor loglike, thin (10)
+update 10000
+coda * , stem(PT_incub3_wardTRUE_intFALSE_binary_phase12FALSE_0.002_0.02)
+ 

@@ -1,0 +1,17 @@
+ssh moyin@163.1.213.159
+screen -S jags_STAFF_incub5_wardFALSE_intTRUE_binary_phase12FALSE_0.002_0.02_2021-03-19
+cd ~/oxford_covid/analysis/output_raw
+jags
+model in "~/oxford_covid/analysis/models/int_noward.txt"
+data in "~/oxford_covid/analysis/data/STAFF_incub5_wardFALSE_intTRUE_binary_phase12FALSE_0.002_0.02_data.R"
+compile, nchains(3)
+parameters in "~/oxford_covid/analysis/data/STAFF_incub5_wardFALSE_intTRUE_binary_phase12FALSE_0.002_0.02_init.R"
+initialize
+update 2000
+monitor loglike, thin (100)
+update 10000
+coda * , stem(STAFF_incub5_wardFALSE_intTRUE_binary_phase12FALSE_0.002_0.02)
+
+
+/poll "Happy Monday people! Let's vote for the paper for this Friday's journal club" "Study Designs for Evaluating Different Efficacy and Effectiveness Aspects of Vaccines https://pubmed.ncbi.nlm.nih.gov/9384199/" "Estimated transmissibility and impact of SARS-CoV-2 lineage B.1.1.7 in England https://science.sciencemag.org/content/early/2021/03/03/science.abg3055" "Global, regional, and national estimates of the population at increased risk of severe COVID-19 due to underlying health conditions in 2020: a modelling study https://www.sciencedirect.com/science/article/pii/S2214109X20302643" "Negative frequency-dependent selection and asymmetrical transformation stabilise multi-strain bacterial population structures https://www.nature.com/articles/s41396-020-00867-w"
+ 
