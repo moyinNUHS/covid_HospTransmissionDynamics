@@ -5,13 +5,24 @@
 # clean environment 
 rm(list = ls())
 
+## load data 
+### for JR cluster:
+setwd('~/oxford_covid/analysis/')
+load('~/oxford_covid/data/metadata/pt.df190221.Rdata')
+load('~/oxford_covid/data/metadata/staff.df190221.Rdata')
+
+### for local machine 
+# setwd('~/Documents/nBox/COVID/HA_COVID/Oxford/analysis_code/jags_commandline/')
+# load('~/Documents/nBox/COVID/HA_COVID/Oxford/metadata/pt.df190221.Rdata')
+# load('~/Documents/nBox/COVID/HA_COVID/Oxford/metadata/staff.df190221.Rdata')
+
 clean.dat.jags.commandline <- function(dat, 
                                        incub, 
                                        phase12 = F, 
                                        ward = F,
                                        int = F,
                                        infectiousness = 'binary', 
-                                       mean_prior = 0, 
+                                       mean_prior = 0.002, 
                                        sd_prior = 0.02) {
   
   # clean data for JAGS
@@ -44,24 +55,45 @@ clean.dat.jags.commandline <- function(dat,
                         paste0('pt', infectiousness.col, incub, '_comm'),
                         paste0('pt', infectiousness.col, incub, '_noso'),
                         paste0('staff', infectiousness.col, incub))]
+  if (pop == 'STAFF') {
+    dat.red = dat.incub[c(paste0('infection_day_incub', incub, '_outcome'), 
+                          'ward',
+                          'phase2', 
+                          'phase3',
+                          paste0('pt', infectiousness.col, incub, '_comm'),
+                          paste0('pt', infectiousness.col, incub, '_noso'),
+                          paste0('staff', infectiousness.col, incub), 
+                          'comm_infectpa')]
+  }
   
   
   # get just the rows with complete entries 
   dat.complete = dat.red[complete.cases(dat.red),]
-
+  
+  # pos.rows = which(dat.complete[, 1] == 1)
+  # neg.rows = which(dat.complete[, 1] == 0)
+  # dat.complete = rbind.data.frame(dat.complete[sample(pos.rows, 20), ], 
+  #                                 dat.complete[sample(pos.rows, 50), ])
+  
   # get the data to dump
   N = as.numeric(nrow(dat.complete))
   outcome = as.numeric(as.character(dat.complete[, paste0('infection_day_incub', incub, '_outcome')]))
-  foi_comm = dat.complete[,grep('comm', colnames(dat.complete))]
+  foi_comm = dat.complete[,grep('_comm', colnames(dat.complete))]
   foi_noso = dat.complete[,grep('noso', colnames(dat.complete))]
   foi_staff = dat.complete[,grep('staff', colnames(dat.complete))]
+  if (pop == 'STAFF') {foi_comm_admit = dat.complete[, grep('comm_', colnames(dat.complete))]} # add community pressure if staff
   
   if (ward == T) {admission_ward_index = as.numeric(as.factor(dat.complete$ward)); N_ward = length(unique(admission_ward_index))}
   if (int == T) {phase2 = dat.complete$phase2; phase3 = dat.complete$phase3}
   
   # dump data 
   fileName = paste0("data/", pop, "_incub", incub, "_ward", ward, "_int", int, "_", infectiousness, "_", "phase12", phase12, "_", mean_prior, "_", sd_prior)
-  dat.to.save = c('N', 'outcome', 'foi_comm', 'foi_noso', 'foi_staff', 'mean_prior', 'sd_prior')
+  if (pop == 'STAFF') {
+    dat.to.save = c('N', 'outcome', 'foi_comm', 'foi_noso', 'foi_staff', 'foi_comm_admit', 'mean_prior', 'sd_prior')
+  } else {
+    dat.to.save = c('N', 'outcome', 'foi_comm', 'foi_noso', 'foi_staff', 'mean_prior', 'sd_prior')
+  }
+  
   if (ward == T & int == F) {dat.to.save = c(dat.to.save, 'admission_ward_index', 'N_ward')}
   if (ward == F & int == T) {dat.to.save = c(dat.to.save, 'phase2', 'phase3')}
   
@@ -69,23 +101,46 @@ clean.dat.jags.commandline <- function(dat,
   
   ## save initial values 
   if (ward == T) {
-    aprimed = rep(0.0001, N_ward); bprimed = rep(0.0001, N_ward); cprimed = rep(0.0001, N_ward); dprimed = rep(0.0001, N_ward); 
-    a0 = 0.001; b0 = 0.001; c0 = 0.001; d0 = 0.001; sigma.a = 0.001; sigma.b = 0.001; sigma.c = 0.001; sigma.d = 0.001
-    dump(c('aprimed', 'bprimed', 'cprimed', 'dprimed', 
-           'a0', 'b0', 'c0', 'd0', 
-           'sigma.a', 'sigma.b', 'sigma.c', 'sigma.d'), 
-         file = paste0(fileName, "_init.R"))
+    if (pop == 'STAFF') {
+      aprimed = rep(0.0001, N_ward); bprimed = rep(0.0001, N_ward); cprimed = rep(0.0001, N_ward); dprimed = rep(0.0001, N_ward); eprimed = rep(0.0001, N_ward); 
+      a0 = 0.001; b0 = 0.001; c0 = 0.001; d0 = 0.001; e0 = 0.001
+      sigma.a = 0.001; sigma.b = 0.001; sigma.c = 0.001; sigma.d = 0.001; sigma.e = 0.001
+      dump(c('aprimed', 'bprimed', 'cprimed', 'dprimed', 'eprimed', 
+             'a0', 'b0', 'c0', 'd0', 'e0',
+             'sigma.a', 'sigma.b', 'sigma.c', 'sigma.d', 'sigma.e'), 
+           file = paste0(fileName, "_init.R"))
+    } else {
+      aprimed = rep(0.0001, N_ward); bprimed = rep(0.0001, N_ward); cprimed = rep(0.0001, N_ward); dprimed = rep(0.0001, N_ward); 
+      a0 = 0.001; b0 = 0.001; c0 = 0.001; d0 = 0.001; sigma.a = 0.001; sigma.b = 0.001; sigma.c = 0.001; sigma.d = 0.001
+      dump(c('aprimed', 'bprimed', 'cprimed', 'dprimed', 
+             'a0', 'b0', 'c0', 'd0', 
+             'sigma.a', 'sigma.b', 'sigma.c', 'sigma.d'), 
+           file = paste0(fileName, "_init.R"))
+    }
     
   } else if (int == T) {
-    a0 = 0.001; a_p2 = 0.001; a_p3 = 0.001; b_comm = 0.001; b_noso = 0.001; b_staff = 0.001; b_comm_p2 = 0.001;
-    b_noso_p2 = 0.001;  b_staff_p2 = 0.001; b_comm_p3 = 0.001; b_noso_p3 = 0.001; b_staff_p3 = 0.001
-    dump(c('a0', 'a_p2', 'a_p3', 
-           'b_comm', 'b_noso', 'b_staff','b_comm_p2', 'b_noso_p2', 'b_staff_p2',
-           'b_comm_p3', 'b_noso_p3', 'b_staff_p3'), file = paste0(fileName, "_init.R"))
+    if (pop == 'STAFF') {
+      a0 = 0.001; a_p2 = 0.001; a_p3 = 0.001; b_comm = 0.001; b_noso = 0.001; b_staff = 0.001;  b_comm_admit = 0.001; b_comm_p2 = 0.001;
+      b_noso_p2 = 0.001;  b_staff_p2 = 0.001; b_comm_admit_p2 = 0.001; b_comm_p3 = 0.001; b_noso_p3 = 0.001; b_staff_p3 = 0.001; b_comm_admit_p3 = 0.001
+      dump(c('a0', 'a_p2', 'a_p3', 
+             'b_comm', 'b_noso', 'b_staff', 'b_comm_admit','b_comm_p2', 'b_noso_p2', 'b_staff_p2','b_comm_admit_p2',
+             'b_comm_p3', 'b_noso_p3', 'b_staff_p3', 'b_comm_admit_p3'), file = paste0(fileName, "_init.R"))
+    } else {
+      a0 = 0.001; a_p2 = 0.001; a_p3 = 0.001; b_comm = 0.001; b_noso = 0.001; b_staff = 0.001; b_comm_p2 = 0.001;
+      b_noso_p2 = 0.001;  b_staff_p2 = 0.001; b_comm_p3 = 0.001; b_noso_p3 = 0.001; b_staff_p3 = 0.001
+      dump(c('a0', 'a_p2', 'a_p3', 
+             'b_comm', 'b_noso', 'b_staff','b_comm_p2', 'b_noso_p2', 'b_staff_p2',
+             'b_comm_p3', 'b_noso_p3', 'b_staff_p3'), file = paste0(fileName, "_init.R"))
+    }
     
   } else {
-    a = 0.001; b = 0.001; c = 0.001; d = 0.001
-    dump(c('a', 'b', 'c', 'd'), file = paste0(fileName, "_init.R"))
+    if (pop == 'STAFF') {
+      a = 0.001; b = 0.001; c = 0.001; d = 0.001; e = 0.001
+      dump(c('a', 'b', 'c', 'd', 'e'), file = paste0(fileName, "_init.R"))
+    } else {
+      a = 0.001; b = 0.001; c = 0.001; d = 0.001
+      dump(c('a', 'b', 'c', 'd'), file = paste0(fileName, "_init.R"))
+    }
   }
   
 }
@@ -113,4 +168,6 @@ clean.dat.jags.commandline(dat = staff.df, incub = 7, ward = T)
 clean.dat.jags.commandline(dat = staff.df, incub = 5, ward = T, phase12 = T)
 clean.dat.jags.commandline(dat = staff.df, incub = 5, ward = T, infectiousness = 'scaled')
 clean.dat.jags.commandline(dat = staff.df, incub = 5, ward = T, mean_prior = 0.01, sd_prior = 0.1)
+
+clean.dat.jags.commandline(dat = pt.df, incub = 10, ward = T)
 
