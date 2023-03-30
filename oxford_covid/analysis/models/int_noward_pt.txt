@@ -1,0 +1,34 @@
+
+model{
+    
+    # Likelihood:
+    for (i in 1:N){
+      
+      outcome[i] ~ dbern(mu[i]) 
+      
+      logit(mu[i]) <- a0 + 
+        a_p2 * phase2[i] + 
+        a_p3 * phase3[i] +
+        (b_comm + b_comm_p2 * phase2[i] + b_comm_p3 * phase3[i]) * foi_comm[i] + 
+        (b_noso + b_noso_p2 * phase2[i] + b_noso_p3 * phase3[i]) * foi_noso[i] + 
+        (b_staff + b_staff_p2 * phase2[i] + b_staff_p3 * phase3[i]) * foi_staff[i] 
+      
+      loglike[i] <- dbin(outcome[i], mu[i], 1) # For WAIC computation
+    }
+    
+    # Priors:
+    a0 ~ dnorm(0, sd_prior) T(0,)
+    a_p2 ~ dnorm(0, sd_prior) T(0,)
+    a_p3 ~ dnorm(0, sd_prior) T(0,)
+    b_comm ~ dnorm(mean_prior, sd_prior) T(0,)
+    b_noso ~ dnorm(mean_prior, sd_prior) T(0,)
+    b_staff ~ dnorm(mean_prior, sd_prior) T(0,)
+    b_comm_p2 ~ dnorm(mean_prior, sd_prior) T(0,)
+    b_noso_p2 ~ dnorm(mean_prior, sd_prior) T(0,)
+    b_staff_p2 ~ dnorm(mean_prior, sd_prior) T(0,)
+    b_comm_p3 ~ dnorm(mean_prior, sd_prior) T(0,)
+    b_noso_p3 ~ dnorm(mean_prior, sd_prior) T(0,)
+    b_staff_p3 ~ dnorm(mean_prior, sd_prior) T(0,)
+    
+}
+
